@@ -1,6 +1,6 @@
 # This is a basic workflow to help you get started with Actions
 
-name: Build push events (debug mode)
+name: Build push events (release mode)
 
 # Controls when the action will run. Triggers the workflow on push or pull request
 # events but only for the develop branch
@@ -9,9 +9,8 @@ on:
   push:
     paths-ignore:
     - "README.md"
-    branches:
-      - master
-      - releases/*
+    tags:
+      - v**
   workflow_dispatch:
         
 env:
@@ -20,7 +19,7 @@ env:
   LAZ_URL: 'gitlab'
   LAZ_BRANCH: 'lazarus_2_2_4'
   LAZ_DIR: 'fpcLaz'
-  BUILD_MODE: 'debug'   
+  BUILD_MODE: 'release'   
   SOURCE: 'docxreplacer_src'
 
 jobs:
