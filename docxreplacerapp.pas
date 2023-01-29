@@ -5,11 +5,8 @@ unit docxreplacerapp;
 interface
 
 uses
-  {$IFDEF UNIX}
-  cthreads,
-  {$ENDIF}
-  Classes, SysUtils, CustApp, zipper, XMLRead, DOM, fpjson, jsonparser, FileUtil,
-  StrUtils, LazFileUtils, XMLWrite;
+  Classes, SysUtils, CustApp, Zipper, XMLRead, DOM, fpjson, FileUtil, LazFileUtils,
+  XMLWrite, rcmdline;
 
 type
 
@@ -17,16 +14,17 @@ type
 
   TDocxReplacerApp = class(TCustomApplication)
   private
+    FCommandLineReader: TCommandLineReader;
     FDocxPath: string;
     FPlaceholdersPath: string;
     FOutputPath: string;
     FXMLDocument: TXMLDocument;
 
+    function GetParamFile(AParam: String): String;
     function GetDocxPath: string;
     function GetOutputPath: string;
     function GetInternalDocXmlPath: string;
     function GetTempPath: string;
-    procedure UncompressAndReadDocXml;
     procedure UncompressDocx;
     function GetXMLDocument: TXMLDocument;
     procedure IteratePlaceholders;
@@ -35,12 +33,15 @@ type
       APlaceholder, AReplacement: string);
     procedure SaveDocx;
     procedure CleanTemp;
+
+    procedure DeclareParams;
+    function ParseParams: boolean;
+    procedure WriteHelp;
   protected
     procedure DoRun; override;
   public
     constructor Create(TheOwner: TComponent); override;
     destructor Destroy; override;
-    procedure WriteHelp; virtual;
 
     property XMLDocument: TXMLDocument read GetXMLDocument;
     property DocxPath: string read GetDocxPath;
@@ -73,6 +74,24 @@ begin
   Result := ConcatPaths([Location, FDocxPath]);
 end;
 
+function TDocxReplacerApp.GetParamFile(AParam: String): String;
+var
+  flagError: Boolean;
+begin
+  Result := FCommandLineReader.readString(AParam);
+  flagError := (not FCommandLineReader.existsProperty(AParam))
+    or (Result = '');
+
+  if flagError then
+    WriteLn('Error: Parameter ' + AParam + ' is mandatory!' + LineEnding)
+  else
+    if not(FileExists(Result)) then
+    begin
+      Result := '';
+      WriteLn('Error: Filename ' + AParam + ' is not found!' + LineEnding);
+    end;
+end;
+
 function TDocxReplacerApp.GetOutputPath: string;
 begin
   Result := ExpandFileName(FOutputPath);
@@ -88,17 +107,6 @@ begin
   Result := ExpandFileName('temp');
 
   ForceDirectories(Result);
-end;
-
-procedure TDocxReplacerApp.UncompressAndReadDocXml;
-begin
-  if not (Assigned(FXMLDocument)) then
-  begin
-    UncompressDocx;
-
-    // Read the contents of the XML file into the TXMLDocument object
-    ReadXMLFile(FXMLDocument, InternalDocXmlPath);
-  end;
 end;
 
 function TDocxReplacerApp.GetXMLDocument: TXMLDocument;
@@ -144,7 +152,6 @@ var
   procedure ProcessNode(Node: TDOMNode);
   var
     cNode: TDOMNode;
-    s: string;
   begin
     if Node = nil then Exit; // Stops if reached a leaf
 
@@ -242,53 +249,70 @@ begin
   DeleteDirectory(Self.TempPath, True);
 end;
 
-procedure TDocxReplacerApp.DoRun;
-var
-  ErrorMsg: string;
+procedure TDocxReplacerApp.DeclareParams;
 begin
-  // quick check parameters
-  ErrorMsg := CheckOptions('h', 'help');
-  if ErrorMsg <> '' then
-  begin
-    ShowException(Exception.Create(ErrorMsg));
-    Terminate;
-    Exit;
-  end;
+  FCommandLineReader.declareFile('inputDocx', 'Filepath to input docx');
+  FCommandLineReader.addAbbreviation('i');
 
-  // parse parameters
-  if HasOption('h', 'help') then
+  FCommandLineReader.declareFile('placeholdersJson', 'Filepath to placeholders json file');
+  FCommandLineReader.addAbbreviation('p');
+
+  FCommandLineReader.declareFile('outputDocx', 'Filepath to output docx', 'newDocx.docx');
+  FCommandLineReader.addAbbreviation('o');
+end;
+
+function TDocxReplacerApp.ParseParams: boolean;
+begin
+  Result := False;
+  try
+    try
+      FCommandLineReader.parse();
+
+      FDocxPath := GetParamFile('inputDocx');
+      FPlaceholdersPath := GetParamFile('placeholdersJson');
+      FOutputPath := FCommandLineReader.readString('outputDocx');
+    except
+      on E: Exception do
+        WriteLn(E.Message + LineEnding);
+    end;
+
+  finally
+    Result := (FDocxPath <> '') or (FPlaceholdersPath <> '');
+  end;
+end;
+
+procedure TDocxReplacerApp.WriteHelp;
+begin
+  WriteLn('The following command line options are valid: ' + LineEnding +
+    LineEnding + FCommandLineReader.availableOptions);
+end;
+
+procedure TDocxReplacerApp.DoRun;
+begin
+  DeclareParams;
+
+  if not ParseParams then
   begin
     WriteHelp;
     Terminate;
     Exit;
   end;
 
-  // parse parameters
-  if HasOption('d', 'docx') then
-  begin
-    FDocxPath := GetOptionValue('i', 'inputdocx');
+  UncompressDocx;
+  try
+    //Read xml in FXMLDocument
+    ReadXMLFile(FXMLDocument, InternalDocXmlPath);
+
+    //Iterate placeholders.json tokens to replace them in xml
+    IteratePlaceholders;
+
+    //Compress again in a docx file
+    SaveDocx;
+
+    CleanTemp;
+  finally
+    FXMLDocument.Free;
   end;
-
-  // parse parameters
-  if HasOption('p', 'placeholders') then
-  begin
-    FPlaceholdersPath := GetOptionValue('p', 'placeholders');
-  end;
-
-  // parse parameters
-  if HasOption('o', 'outputfile') then
-  begin
-    FOutputPath := GetOptionValue('o', 'outputdocx');
-  end;
-
-  FDocxPath := 'test.docx';
-  FPlaceholdersPath := 'test.json';
-  FOutputPath := 'newtest.docx';
-
-  UncompressAndReadDocXml;
-  IteratePlaceholders;
-  SaveDocx;
-  CleanTemp;
 
   // stop program loop
   Terminate;
@@ -298,18 +322,16 @@ constructor TDocxReplacerApp.Create(TheOwner: TComponent);
 begin
   inherited Create(TheOwner);
   StopOnException := True;
+
+  FCommandLineReader := TCommandLineReader.Create;
+  //showErrorAutomatically = false because we won't halt when find wrong param
+  FCommandLineReader.showErrorAutomatically := False;
 end;
 
 destructor TDocxReplacerApp.Destroy;
 begin
   inherited Destroy;
-  FXMLDocument.Free;
-end;
-
-procedure TDocxReplacerApp.WriteHelp;
-begin
-  { add your help code here }
-  writeln('Usage: ', ExeName, ' -h');
+  FCommandLineReader.Free;
 end;
 
 end.
