@@ -1,0 +1,3 @@
+[submodule "rcmdline"]
+	path = 3p/rcmdline
+	url = https://github.com/benibela/rcmdline.git
