@@ -1,24 +1,16 @@
 {
   "placeholder": [
     {
-      "name": "{{nome}}",
-      "value": "Replacement Text 1"
+      "name": "{{TITLE}}",
+      "value": "Lorem ipsum"
     },
     {
-      "name": "{{mese}}",
-      "value": "Replacement Text 2"
+      "name": "{{CHAPTER1}}",
+      "value": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Nunc ac faucibus odio."
     },
     {
-      "name": "{{anno}}",
-      "value": "Replacement Text 3"
-    },
-    {
-      "name": "{{attivita1}}",
-      "value": "Replacement Text 3"
-    },
-    {
-      "name": "{{attivita2}}",
-      "value": "Replacement Text 3"
+      "name": "{{ANOTHERTEXT}}",
+      "value": "Replacement Text"
     }
   ]
 }
