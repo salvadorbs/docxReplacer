@@ -6,7 +6,7 @@ interface
 
 uses
   Classes, SysUtils, CustApp, Zipper, XMLRead, DOM, fpjson, FileUtil, LazFileUtils,
-  XMLWrite, rcmdline;
+  XMLWrite, rcmdline, jsonparser;
 
 type
 
@@ -15,18 +15,18 @@ type
   TDocxReplacerApp = class(TCustomApplication)
   private
     FCommandLineReader: TCommandLineReader;
-    FDocxPath: string;
+    FInputFilePath: string;
     FPlaceholdersPath: string;
     FOutputPath: string;
     FXMLDocument: TXMLDocument;
 
     function GetParamFile(AParam: String): String;
-    function GetDocxPath: string;
+    function GetInputFilePath: string;
     function GetOutputPath: string;
     function GetInternalDocXmlPath: string;
+    function GetPlaceholdersPath: string;
     function GetTempPath: string;
     procedure UncompressDocx;
-    function GetXMLDocument: TXMLDocument;
     procedure IteratePlaceholders;
     procedure IterateXMLDocument(APlaceholder, AReplacement: string);
     procedure ReplacePlaceholder(Node: TDOMNode;
@@ -43,12 +43,17 @@ type
     constructor Create(TheOwner: TComponent); override;
     destructor Destroy; override;
 
-    property XMLDocument: TXMLDocument read GetXMLDocument;
-    property DocxPath: string read GetDocxPath;
+    property InputFilePath: string read GetInputFilePath;
+    property PlaceholdersPath: string read GetPlaceholdersPath;
     property TempPath: string read GetTempPath;
     property OutputPath: string read GetOutputPath;
     property InternalDocXmlPath: string read GetInternalDocXmlPath;
   end;
+
+const
+  PARAM_INPUT_DOC = 'inputDoc';
+  PARAM_OUTPUT_DOC = 'outputDoc';
+  PARAM_TOKENS_JSON = 'placeholdersJson';
 
 implementation
 
@@ -60,7 +65,7 @@ var
 begin
   UnZip := TUnZipper.Create;
   try
-    UnZip.FileName := DocxPath;
+    UnZip.FileName := InputFilePath;
     UnZip.OutputPath := TempPath;
     UnZip.Examine;
     UnZip.UnZipAllFiles;
@@ -69,9 +74,9 @@ begin
   end;
 end;
 
-function TDocxReplacerApp.GetDocxPath: string;
+function TDocxReplacerApp.GetInputFilePath: string;
 begin
-  Result := ConcatPaths([Location, FDocxPath]);
+  Result := CleanAndExpandFilename(FInputFilePath);
 end;
 
 function TDocxReplacerApp.GetParamFile(AParam: String): String;
@@ -85,7 +90,7 @@ begin
   if flagError then
     WriteLn('Error: Parameter ' + AParam + ' is mandatory!' + LineEnding)
   else
-    if not(FileExists(Result)) then
+    if not(FileExists(CleanAndExpandFilename(Result))) then
     begin
       Result := '';
       WriteLn('Error: Filename ' + AParam + ' is not found!' + LineEnding);
@@ -99,7 +104,15 @@ end;
 
 function TDocxReplacerApp.GetInternalDocXmlPath: string;
 begin
-  Result := ConcatPaths([Location, 'temp', 'word/document.xml']);
+  if (LowerCase(ExtractFileExt(FInputFilePath)) = '.docx') then
+    Result := ConcatPaths([Location, 'temp', 'word', 'document.xml'])
+  else
+    Result := ConcatPaths([Location, 'temp', 'content.xml']);
+end;
+
+function TDocxReplacerApp.GetPlaceholdersPath: string;
+begin
+  Result := CleanAndExpandFilename(FPlaceholdersPath);
 end;
 
 function TDocxReplacerApp.GetTempPath: string;
@@ -107,11 +120,6 @@ begin
   Result := ExpandFileName('temp');
 
   ForceDirectories(Result);
-end;
-
-function TDocxReplacerApp.GetXMLDocument: TXMLDocument;
-begin
-  Result := FXMLDocument;
 end;
 
 procedure TDocxReplacerApp.IteratePlaceholders;
@@ -123,7 +131,7 @@ var
   jsonFile: TFileStream;
 begin
   // Load the JSON file containing the placeholder data
-  jsonFile := TFileStream.Create(FPlaceholdersPath, fmOpenRead);
+  jsonFile := TFileStream.Create(PlaceholdersPath, fmOpenRead);
   json := GetJSON(jsonFile);
   try
     // Get the number of placeholders in the JSON file
@@ -169,10 +177,10 @@ var
   end;
 
 begin
-  Assert(Assigned(Self.XMLDocument));
+  Assert(Assigned(Self.FXMLDocument));
 
   // Iterate through all the nodes in the XML document
-  iNode := Self.XMLDocument.DocumentElement.FirstChild;
+  iNode := Self.FXMLDocument.DocumentElement.FirstChild;
   while iNode <> nil do
   begin
     ProcessNode(iNode); // Recursive
@@ -251,13 +259,13 @@ end;
 
 procedure TDocxReplacerApp.DeclareParams;
 begin
-  FCommandLineReader.declareFile('inputDocx', 'Filepath to input docx');
+  FCommandLineReader.declareFile(PARAM_INPUT_DOC, 'Filepath to input docx/odt');
   FCommandLineReader.addAbbreviation('i');
 
-  FCommandLineReader.declareFile('placeholdersJson', 'Filepath to placeholders json file');
+  FCommandLineReader.declareFile(PARAM_TOKENS_JSON, 'Filepath to placeholders json file');
   FCommandLineReader.addAbbreviation('p');
 
-  FCommandLineReader.declareFile('outputDocx', 'Filepath to output docx', 'newDocx.docx');
+  FCommandLineReader.declareFile(PARAM_OUTPUT_DOC, 'Filepath to output docx/odt', 'newDocx.docx');
   FCommandLineReader.addAbbreviation('o');
 end;
 
@@ -268,16 +276,16 @@ begin
     try
       FCommandLineReader.parse();
 
-      FDocxPath := GetParamFile('inputDocx');
-      FPlaceholdersPath := GetParamFile('placeholdersJson');
-      FOutputPath := FCommandLineReader.readString('outputDocx');
+      FInputFilePath := GetParamFile(PARAM_INPUT_DOC);
+      FPlaceholdersPath := GetParamFile(PARAM_TOKENS_JSON);
+      FOutputPath := FCommandLineReader.readString(PARAM_OUTPUT_DOC);
     except
       on E: Exception do
         WriteLn(E.Message + LineEnding);
     end;
 
   finally
-    Result := (FDocxPath <> '') or (FPlaceholdersPath <> '');
+    Result := (FInputFilePath <> '') and (FPlaceholdersPath <> '');
   end;
 end;
 
@@ -288,6 +296,8 @@ begin
 end;
 
 procedure TDocxReplacerApp.DoRun;
+var
+  FileDocPath: String;
 begin
   DeclareParams;
 
@@ -301,15 +311,24 @@ begin
   UncompressDocx;
   try
     //Read xml in FXMLDocument
-    ReadXMLFile(FXMLDocument, InternalDocXmlPath);
+    FileDocPath := InternalDocXmlPath;
+    if (FileExists(FileDocPath)) then
+    begin
+      ReadXMLFile(FXMLDocument, InternalDocXmlPath);
 
-    //Iterate placeholders.json tokens to replace them in xml
-    IteratePlaceholders;
+      //Iterate placeholders.json tokens to replace them in xml
+      IteratePlaceholders;
 
-    //Compress again in a docx file
-    SaveDocx;
+      //Compress again in a docx file
+      SaveDocx;
 
-    CleanTemp;
+      CleanTemp;
+    end
+    else begin
+      WriteLn('Error: File document xml [' + InternalDocXmlPath + '] not found!');
+      Terminate;
+      Exit;
+    end;
   finally
     FXMLDocument.Free;
   end;
